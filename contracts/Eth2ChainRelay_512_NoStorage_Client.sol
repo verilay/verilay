@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // PLEASE NOTE: This is a prototype. Do not use it in production settings. 
+// This contract is tailored to be used by the Verilay client that retrieves Eth2 blocks from a Lodestar node
+// This contract will not work with aritificial data
 
 pragma solidity >=0.8.0 <0.9.0;
 
 import "solidity-bytes-utils/contracts/BytesLib.sol";
+import "./libraries/Memory.sol";
 
 // debug settings
 bool constant MOCK_BLS_PRECOMPILE = false;
@@ -23,6 +26,10 @@ uint constant FINALIZED_ROOT_INDEX = 105;
 uint constant FINALIZED_EPOCH_INDEX = 104;
 uint constant NEXT_SYNC_COMMITTEE_INDEX = 55;
 uint constant NEXT_SYNC_COMMITTEE_PUBKEYS_INDEX = 110;
+uint constant NEXT_SYNC_COMMITTEE_AGGREGATE_PUBKEY_INDEX = 111;
+uint constant CURRENT_SYNC_COMMITTEE_INDEX = 54;
+uint constant CURRENT_SYNC_COMMITTEE_PUBKEYS_INDEX = 108;
+uint constant CURRENT_SYNC_COMMITTEE_AGGREGATE_PUBKEY_INDEX = 109;
 uint constant SLOT_INDEX = 8;
 uint constant STATE_ROOT_INDEX = 11;
 
@@ -31,6 +38,8 @@ struct ChainRelayUpdate {
     bool[SYNC_COMMITTEE_SIZE] participants;
     bytes32 latestBlockRoot;
     bytes32 signingDomain;
+    bytes32 stateRoot;
+    bytes32[] stateRootBranch; 
     uint64 latestSlot;
     bytes32[] latestSlotBranch; 
     bytes32 finalizedBlockRoot; 
@@ -39,34 +48,29 @@ struct ChainRelayUpdate {
     bytes32[] finalizedSlotBranch; 
     bytes32 finalizedStateRoot;
     bytes32[] finalizedStateRootBranch;
-    bytes32 stateRoot;
-    bytes32[] stateRootBranch; 
-}
-
-struct SyncCommitteeUpdate {
-    bytes[SYNC_COMMITTEE_SIZE] nextNextValidatorSet;
-    bytes nextNextValidatorSetAggregate;
-    bytes32[] nextNextValidatorSetBranch;
+    bytes[SYNC_COMMITTEE_SIZE] syncCommittee;
+    bytes syncCommitteeAggregate;
+    bytes32[] syncCommitteeBranch; 
 }
 
 /** 
  * @title Chain Relay
  * @dev Implements a chain relay/light client for eth2 consensus post-altair (including sync committees)
  */
-contract Eth2ChainRelay_512 {
+contract Eth2ChainRelay_512_NoStorage_Client {
     using BytesLib for bytes;
 
     uint64 private signatureThreshold; // 0 < signatureThreshold <= 512
     uint64 private trustingPeriod; // validators are trusted for a certain time, ensuring they have not exited the validator set, in unix time
-    bytes[SYNC_COMMITTEE_SIZE] private currentValidatorSet;
     bytes private currentValidatorSetAggregate;
-    bytes[SYNC_COMMITTEE_SIZE] private nextValidatorSet;
     bytes private nextValidatorSetAggregate;
     bytes32 private finalizedBlockRoot;
     bytes32 private finalizedStateRoot; 
     uint64 private latestSlot;
     uint64 private latestSlotWithValidatorSetChange;
     uint64 private finalizedSlot;
+    bytes[SYNC_COMMITTEE_SIZE] testSyncCommittee;
+    bytes testSyncCommitteeAggregate;
     
     constructor(uint64 _signatureThreshold, 
                 uint64 _trustingPeriod, 
@@ -85,18 +89,6 @@ contract Eth2ChainRelay_512 {
         finalizedStateRoot=_finalizedStateRoot;
     }
 
-    function initializeCurrent(bytes[SYNC_COMMITTEE_SIZE] memory _currentValidatorSet, 
-                            bytes memory _currentValidatorSetAggregate) public {
-        currentValidatorSet=_currentValidatorSet;
-        currentValidatorSetAggregate=_currentValidatorSetAggregate;
-                }
-
-    function initializeNext(bytes[SYNC_COMMITTEE_SIZE] memory _nextValidatorSet,
-                            bytes memory _nextValidatorSetAggregate) public {
-        nextValidatorSet=_nextValidatorSet;
-        nextValidatorSetAggregate=_nextValidatorSetAggregate;
-                }
-
     function getLatestSlotWithValidatorSetChange() public view returns (uint64) {
         return latestSlotWithValidatorSetChange;
     }
@@ -108,8 +100,45 @@ contract Eth2ChainRelay_512 {
     function getFinalizedStateRoot() public view returns (bytes32) {
         return finalizedStateRoot;
     }
+
+    function testEncoding(bytes32 message, bytes memory signature, bytes[] memory pubkeys) public view returns (bytes memory) {
+        return abi.encode(message, signature, pubkeys);
+    }
+
+    function testJustStoreSyncCommittee(bytes[SYNC_COMMITTEE_SIZE] memory committee, bytes memory aggregate) public {
+        testSyncCommittee = committee;
+        testSyncCommitteeAggregate = aggregate;
+    }
+
+    function testJustDoSyncCommitteeMerkleizationFromMemory(bytes[SYNC_COMMITTEE_SIZE] memory committee, bytes memory aggregate) public returns (bytes32) {
+        return hashTreeRootSyncCommittee(committee, aggregate);
+    }
+
+    function testJustDoSyncCommitteeMerkleizationFromStorage() public returns (bytes32) {
+        return hashTreeRootSyncCommittee(testSyncCommittee, testSyncCommitteeAggregate);
+    }
+
+    function testJustReadSyncCommitteeFromStorage() public returns (bytes[SYNC_COMMITTEE_SIZE] memory) {
+        return testSyncCommittee;
+    }
+
+    function testJustSubmitSyncCommitteeViaMemory(bytes[SYNC_COMMITTEE_SIZE] memory) public returns (bool) {
+        return true;
+    }
+
+    function testJustSubmitSyncCommitteeViaCalldata(bytes[SYNC_COMMITTEE_SIZE] calldata) public returns (bool) {
+        return true;
+    }
+
+    function testDoNothingWithData(ChainRelayUpdate memory _chainRelayUpdate) public returns (bool) {
+        if (_chainRelayUpdate.syncCommittee.length == 512) {
+            return true;
+        } else {
+            return false;
+        }
+    }
     
-    function submitUpdate(ChainRelayUpdate memory _chainRelayUpdate, SyncCommitteeUpdate memory _syncCommitteeUpdate) public returns (bool) {
+    function submitUpdate(ChainRelayUpdate memory _chainRelayUpdate) public returns (bool) {
         bytes32 signingRoot = computeSigningRoot(_chainRelayUpdate.latestBlockRoot, _chainRelayUpdate.signingDomain);
         uint numberOfParticipants = countTrueBools(_chainRelayUpdate.participants);
         require(
@@ -123,24 +152,24 @@ contract Eth2ChainRelay_512 {
                 _chainRelayUpdate.stateRootBranch), 
             "merkle proof for latest state root not valid");
         // the following checks are executed but ignored in order to allow for testing with synthetic SSZ/Eth2 data
-        /*require(*/
+        require(
             validateMerkleBranch(
                 _chainRelayUpdate.latestBlockRoot, 
                 merklelizeSlot(_chainRelayUpdate.latestSlot), 
                 SLOT_INDEX, 
-                _chainRelayUpdate.latestSlotBranch)/*, "merkle proof for latest slot not valid")*/;
-        /*require(*/
+                _chainRelayUpdate.latestSlotBranch), "merkle proof for latest slot not valid");
+        require(
             validateMerkleBranch(
                 _chainRelayUpdate.stateRoot, 
                 _chainRelayUpdate.finalizedBlockRoot, 
                 FINALIZED_ROOT_INDEX, 
-                _chainRelayUpdate.finalizingBranch)/*, "merkle proof for finalized block root not valid")*/;
-        /*require(*/
+                _chainRelayUpdate.finalizingBranch), "merkle proof for finalized block root not valid");
+        require(
             validateMerkleBranch(
                 _chainRelayUpdate.finalizedBlockRoot, 
                 merklelizeSlot(_chainRelayUpdate.finalizedSlot), 
                 SLOT_INDEX, 
-                _chainRelayUpdate.finalizedSlotBranch)/*, "merkle proof for finalized slot not valid")*/;
+                _chainRelayUpdate.finalizedSlotBranch), "merkle proof for finalized slot not valid");
         require(
             validateMerkleBranch(
                 _chainRelayUpdate.finalizedBlockRoot, 
@@ -155,39 +184,37 @@ contract Eth2ChainRelay_512 {
             _chainRelayUpdate.finalizedSlot >= finalizedSlot, 
             "finalized block older than last finalized block seen by chain relay");
         uint slot_distance = _chainRelayUpdate.latestSlot - latestSlotWithValidatorSetChange; 
-        if ((slot_distance / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)) == 0) {
-           require(
-               fastAggregateVerify(serializeAggregateSignature(
-                   signingRoot, 
-                   _chainRelayUpdate.signature, 
-                   getActiveValidators(currentValidatorSet, _chainRelayUpdate.participants, numberOfParticipants))), 
-               "signature by current sync committee not valid");
-        } else if ((slot_distance / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)) == 1) {
+        // if ((slot_distance / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)) == 0) {
+        //     // the following check is executed but ignored in order to allow for testing with synthetic SSZ/Eth2 data
+        //     require(validateMerkleBranch(
+        //         finalizedStateRoot, 
+        //         hashTreeRootSyncCommittee(_chainRelayUpdate.syncCommittee, _chainRelayUpdate.syncCommitteeAggregate), 
+        //         CURRENT_SYNC_COMMITTEE_INDEX, 
+        //         _chainRelayUpdate.syncCommitteeBranch), "merkle proof for current sync committee not valid");
+        //    require(
+        //        fastAggregateVerify(serializeAggregateSignature(
+        //            signingRoot, 
+        //            _chainRelayUpdate.signature, 
+        //            getActiveValidators(_chainRelayUpdate.syncCommittee, _chainRelayUpdate.participants, numberOfParticipants))), 
+        //        "signature by current sync committee not valid");
+        // } else if ((slot_distance / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)) == 1) {
+            // the following check is executed but ignored in order to allow for testing with synthetic SSZ/Eth2 data
+            require(validateMerkleBranch(
+                finalizedStateRoot, 
+                hashTreeRootSyncCommittee(_chainRelayUpdate.syncCommittee, _chainRelayUpdate.syncCommitteeAggregate), 
+                NEXT_SYNC_COMMITTEE_INDEX, 
+                _chainRelayUpdate.syncCommitteeBranch)
+                , "merkle proof for next sync committee not valid");
             require(
                 fastAggregateVerify(serializeAggregateSignature(
                     signingRoot, 
                     _chainRelayUpdate.signature, 
-                    getActiveValidators(nextValidatorSet, _chainRelayUpdate.participants, numberOfParticipants))), 
+                    getActiveValidators(_chainRelayUpdate.syncCommittee, _chainRelayUpdate.participants, numberOfParticipants))), 
                 "signature by next sync committee not valid");
-            uint finalized_slot_distance = _chainRelayUpdate.finalizedSlot - latestSlotWithValidatorSetChange; 
-            if ((finalized_slot_distance / (SLOTS_PER_EPOCH * EPOCHS_PER_SYNC_COMMITTEE_PERIOD)) == 1) { 
-                bytes32 merklelizedNextNextSyncCommittee = hashTreeRootSyncCommittee(_syncCommitteeUpdate.nextNextValidatorSet, _syncCommitteeUpdate.nextNextValidatorSetAggregate);
-                require(
-                    validateMerkleBranch(
-                        _chainRelayUpdate.finalizedStateRoot, 
-                        merklelizedNextNextSyncCommittee, 
-                        NEXT_SYNC_COMMITTEE_INDEX, 
-                        _syncCommitteeUpdate.nextNextValidatorSetBranch), 
-                    "merkle proof of next next sync committee not valid");
-                currentValidatorSet = nextValidatorSet; 
-                currentValidatorSetAggregate = nextValidatorSetAggregate;
-                nextValidatorSet = _syncCommitteeUpdate.nextNextValidatorSet; 
-                nextValidatorSetAggregate = _syncCommitteeUpdate.nextNextValidatorSetAggregate;
-                latestSlotWithValidatorSetChange = _chainRelayUpdate.finalizedSlot;
-            } 
-        } else {
-            revert("latest slot does not indicate that current or next sync committee is responsible");
-        }
+            latestSlotWithValidatorSetChange = _chainRelayUpdate.finalizedSlot;
+        // } else {
+        //     revert("latest slot does not indicate that current or next sync committee is responsible");
+        // }
         finalizedBlockRoot = _chainRelayUpdate.finalizedBlockRoot; 
         finalizedStateRoot = _chainRelayUpdate.finalizedStateRoot;
         latestSlot = _chainRelayUpdate.latestSlot;
@@ -231,11 +258,10 @@ contract Eth2ChainRelay_512 {
         }
         for (uint i = 0; i < _pubkeys.length; i++) {
             for (uint j = 0; j < 48; j++) {
-            //for (uint j = 0; j < _pubkeys[i].length; j++) {
                 serialized[32+96+2+i*48+j] = _pubkeys[i][j];
             }
         }
-        return serialized;
+       return serialized;
     }
     
     function fastAggregateVerify(bytes memory _input) public view returns (bool o) {
@@ -358,7 +384,7 @@ contract Eth2ChainRelay_512 {
     function merkleize(bytes32[SYNC_COMMITTEE_SIZE] memory _chunks) public pure returns (bytes32) {
         uint length_next_pow = nextPowOfTwo(_chunks.length);
         for (uint i = _chunks.length; i < length_next_pow; i++) {
-            // filling lowest level not necessary b/c size always 2^n
+           // filling lowest level not necessary b/c size always 2^n
         }
         for (uint level = 0; level<floorLog2(length_next_pow); level++) {
             uint step = 2**level;

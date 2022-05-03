@@ -4,7 +4,7 @@
 
 pragma solidity >=0.8.0 <0.9.0;
 
-import "bytes/BytesLib.sol";
+import "solidity-bytes-utils/contracts/BytesLib.sol";
 
 // debug settings
 bool constant MOCK_BLS_PRECOMPILE = false;

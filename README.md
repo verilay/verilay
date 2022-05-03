@@ -23,7 +23,7 @@ Deploying and testing the chain relay prototype requires running a custom versio
 git submodule update --init
 cd verilay-go-ethereum
 make geth 
-./build/bin/geth --rpc.gascap 30000000 --datadir test-chain-dir --http --dev --vmdebug --verbosity 3 --http.api debug,eth,personal,net,web3
+./build/bin/geth --rpc.gascap 30000000 --datadir test-chain-dir --http --dev --vmdebug --verbosity 3 --http.api debug,eth,personal,net,web3 --http.port 8555
 ```
 
 The customized files in `verilay-go-ethereum` are 
@@ -36,17 +36,29 @@ The customized files in `verilay-go-ethereum` are
 
 Deploying different versions of the chain relay smart contract and reproducibly testing it is faciliated by [Truffle](https://github.com/trufflesuite/truffle). `contracts` contains the chain relay prototype smart contracts as Solidity source code in different configurations (Eth2 sync committee with 32 members, Eth2 sync committee with 512 members, Eth2 sync committee with 512 members and No-Store optimization). `migrations` contains instructions for Truffle on how to deploy the contracts for testing. `tests` contains test scenarios defined in Solidity (`*.sol`) as well as JavaScript (`*.js`). The file `tests/evaluation.js` contains the test scenarios used for evaluating the chain relay prototype, specifically its Gas consumption.
 
-In order to deploy the smart contracts and run the tests, make sure [Truffle](https://github.com/trufflesuite/truffle) and [NodeJS and NPM](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) are installed, start the customized Ethereum testnet (see above) and run the following commands:
+In order to deploy the smart contracts and run the tests, make sure [NodeJS and NPM](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) are installed, start the customized Ethereum testnet (see above) and run the following commands:
 
 ```bash
 npm install
-truffle install
-truffle test
+npx truffle test
 ```
 
-This deploys the smart contracts and executes all test scenarios. To execute a single test scenario, for example the scenarios relevant for the evaluation of the prototype, run `truffle test test/evaluation.js`. 
+This deploys the smart contracts and executes all test scenarios. To execute a single test scenario, for example the scenarios relevant for the evaluation of the prototype, run `npx truffle test test/evaluation.js`. 
 
 The file `recording_test_results.txt` contains a recording of the output of running all tests. 
+
+## Client
+
+The client retrieves sync committee updates from a consensus layer node, deploys the relay contract to the modified Ethereum node and applies updates to the contract. Currently, only the [lodestar](https://github.com/ChainSafe/lodestar) client supports the required lightclient API. Furthermore, the current client implementation only supports updating between sync committee periods. Intermediate blocks are soon to follow.
+
+The client is implemented in typscript and tests are run via the following commands:
+```bash
+npx truffle compile
+cd client
+npm install
+npx tsc
+npm test
+```
 
 ## Creating custom tests
 
@@ -71,7 +83,7 @@ The file can be run by installing Python 3 (do consider creating a [virtual envi
 
 ```bash
 cd test/generate_data/ssz
-pip3 install -r requirements.txt
+cat requirements.txt | xargs -n 1 -L 1 pip3 install # installs dependencies one by one
 python3 generate_ssz_test_data.py
 ```
 

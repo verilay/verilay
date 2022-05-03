@@ -13,7 +13,7 @@ import "../contracts/Eth2ChainRelay_2.sol";
 
 import "truffle/Assert.sol";
 import "truffle/DeployedAddresses.sol";
-import "bytes/AssertBytes.sol";
+import "solidity-bytes-utils/contracts/AssertBytes.sol";
 
 // File name has to end with '_test.sol', this file can contain more than one testSuite contracts
 contract TestEth2ChainRelayUnitHelpers {

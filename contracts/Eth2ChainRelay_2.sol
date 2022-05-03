@@ -5,7 +5,9 @@
 
 pragma solidity >=0.8.0 <0.9.0;
 
-import "bytes/BytesLib.sol";
+// AssertBytes is only imported so that truffle builds it for the tests that require it
+import "solidity-bytes-utils/contracts/AssertBytes.sol";
+import "solidity-bytes-utils/contracts/BytesLib.sol";
 
 // debug settings
 bool constant MOCK_BLS_PRECOMPILE = true;
